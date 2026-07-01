@@ -1,0 +1,3 @@
+import AppKit
+
+BadgeBellApplication.run()
