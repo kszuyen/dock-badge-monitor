@@ -56,6 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.alertController?.show(snapshot: transition.snapshot)
             }
         }
+        scheduler.onUnreadCleared = { [weak self] _ in
+            Task { @MainActor in
+                self?.alertController?.dismiss()
+                self?.statusBarController?.setAlertActive(false)
+            }
+        }
 
         self.provider = provider
         self.preferences = preferences

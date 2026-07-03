@@ -78,6 +78,30 @@ final class MonitorSchedulerTests: XCTestCase {
             [.hasUnread(count: 1), .hasUnread(count: nil)]
         )
     }
+
+    func testEmitsUnreadClearedWhenReturningToNone() {
+        let provider = StubProvider(
+            snapshots: [
+                .none,
+                .hasUnread(count: 1),
+                .hasUnread(count: 1),
+                .none,
+            ]
+        )
+        let scheduler = MonitorScheduler(providers: [provider])
+        var clearedSnapshots: [AppMonitorSnapshot] = []
+
+        scheduler.onUnreadCleared = { snapshot in
+            clearedSnapshots.append(snapshot)
+        }
+
+        scheduler.pollOnce()
+        scheduler.pollOnce()
+        scheduler.pollOnce()
+        scheduler.pollOnce()
+
+        XCTAssertEqual(clearedSnapshots.map(\.unreadState), [.none])
+    }
 }
 
 private final class StubProvider: AppMonitorProvider, @unchecked Sendable {

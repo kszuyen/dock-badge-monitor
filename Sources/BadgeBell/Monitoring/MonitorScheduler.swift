@@ -10,6 +10,7 @@ public final class MonitorScheduler: @unchecked Sendable {
     private var timer: Timer?
 
     public var onUnreadTransition: ((UnreadTransition) -> Void)?
+    public var onUnreadCleared: ((AppMonitorSnapshot) -> Void)?
     public var onSnapshot: ((AppMonitorSnapshot) -> Void)?
 
     public init(providers: [AppMonitorProvider]) {
@@ -46,6 +47,10 @@ public final class MonitorScheduler: @unchecked Sendable {
             if Self.shouldEmitUnreadTransition(from: lastUnreadState, to: snapshot.unreadState) {
                 onUnreadTransition?(UnreadTransition(snapshot: snapshot))
             }
+
+            if Self.shouldEmitUnreadCleared(from: lastUnreadState, to: snapshot.unreadState) {
+                onUnreadCleared?(snapshot)
+            }
         }
     }
 
@@ -55,6 +60,15 @@ public final class MonitorScheduler: @unchecked Sendable {
             true
         case (.hasUnread(let previousCount?), .hasUnread(let currentCount?)):
             currentCount > previousCount
+        default:
+            false
+        }
+    }
+
+    private static func shouldEmitUnreadCleared(from previous: UnreadState, to current: UnreadState) -> Bool {
+        switch (previous, current) {
+        case (.hasUnread, .none):
+            true
         default:
             false
         }
