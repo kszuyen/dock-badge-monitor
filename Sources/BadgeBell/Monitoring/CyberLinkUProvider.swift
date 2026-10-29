@@ -20,12 +20,16 @@ public struct CyberLinkUProvider: AppMonitorProvider {
     }
 
     public func snapshot() -> AppMonitorSnapshot {
-        AppMonitorSnapshot(
+        let installed = appLocator.appIsInstalled(bundleIdentifier: bundleIdentifier)
+        let running = appLocator.appIsRunning(bundleIdentifier: bundleIdentifier)
+        let result = running ? badgeReader.readStatus(bundleIdentifier: bundleIdentifier) : BadgeReadResult(unreadState: .none)
+        return AppMonitorSnapshot(
             providerID: id,
             appName: appName,
-            isInstalled: appLocator.appIsInstalled(bundleIdentifier: bundleIdentifier),
-            isRunning: appLocator.appIsRunning(bundleIdentifier: bundleIdentifier),
-            unreadState: badgeReader.unreadState(bundleIdentifier: bundleIdentifier)
+            isInstalled: installed,
+            isRunning: running,
+            unreadState: result.unreadState,
+            monitoringIssue: result.issue
         )
     }
 

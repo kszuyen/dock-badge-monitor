@@ -2,164 +2,174 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var provider: CyberLinkUProvider?
-    private var preferences: PreferencesStore?
-    private var alertController: FloatingAlertController?
-    private var statusBarController: StatusBarController?
-    private var scheduler: MonitorScheduler?
-    private var permissionTimer: Timer?
+    private let provider = CyberLinkUProvider()
+    private var preferences = PreferencesStore()
     private let launchAgent = LaunchAgentManager()
+    private var reminder = ReminderState()
+    private var alertController: FloatingAlertController!
+    private var statusBar: StatusBarController!
+    private var scheduler: MonitorScheduler!
+    private var maintenanceTimer: Timer?
     private var permissionGranted = false
-    private var lastSnapshot: AppMonitorSnapshot?
-    private let accessibilityPermissionChecker: AccessibilityPermissionChecking = SystemAccessibilityPermissionChecker()
+    private var lastLoggedSnapshot: AppMonitorSnapshot?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLog.write("BadgeBell started, version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development").")
-        NSApplication.shared.setActivationPolicy(.accessory)
-
-        let provider = CyberLinkUProvider()
-        let preferences = PreferencesStore()
-        let alertController = FloatingAlertController(openAction: {
-            provider.openApp()
-        })
-        let statusBarController = StatusBarController(
-            openU: {
-                provider.openApp()
-            },
-            dismissAlert: {
-                alertController.dismiss()
-            },
-            quit: {
-                NSApplication.shared.terminate(nil)
-            },
-            pollingInterval: preferences.pollingInterval,
-            setPollingInterval: { [weak self] interval in
-                self?.updatePollingInterval(interval)
-            },
-            alertsPaused: preferences.alertsPaused,
-            setAlertsPaused: { [weak self] alertsPaused in
-                self?.updateAlertsPaused(alertsPaused)
-            },
-            launchAtLogin: launchAgent.launchAtLogin,
-            setLaunchAtLogin: { [weak self] enabled in
-                guard let self else { return false }
-                do {
-                    try self.launchAgent.setLaunchAtLogin(enabled)
-                    AppLog.write("Launch at login: \(enabled).")
-                    return true
-                } catch {
-                    AppLog.write("Cannot change launch at login: \(error.localizedDescription)")
-                    Task { @MainActor in
-                        let alert = NSAlert()
-                        alert.messageText = "Could not change Launch at Login"
-                        alert.informativeText = error.localizedDescription
-                        alert.runModal()
-                    }
-                    return false
-                }
-            },
-            openAccessibilitySettings: {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
-            },
-            openDiagnostics: { [weak self] in
-                guard let self else { return }
-                try? FileManager.default.createDirectory(at: self.launchAgent.logsDirectory, withIntermediateDirectories: true)
-                NSWorkspace.shared.open(self.launchAgent.logsDirectory)
-            }
+        NSApp.setActivationPolicy(.accessory)
+        reminder = ReminderState(isPaused: preferences.alertsPaused, pauseUntil: preferences.pauseUntil)
+        if reminder.expirePause() { persistPause() }
+        alertController = FloatingAlertController(
+            openAction: { [weak self] in self?.openU() },
+            dismissAction: { [weak self] in self?.hideReminder() },
+            snoozeAction: { [weak self] in self?.pause(minutes: 10) }
         )
-        let providers: [AppMonitorProvider] = preferences.isProviderEnabled(provider.id) ? [provider] : []
-        let scheduler = MonitorScheduler(providers: providers)
-
+        var actions = StatusBarController.Actions()
+        actions.openU = { [weak self] in self?.openU() }
+        actions.hide = { [weak self] in self?.hideReminder() }
+        actions.pause = { [weak self] minutes in self?.pause(minutes: minutes) }
+        actions.resume = { [weak self] in self?.resume() }
+        actions.interval = { [weak self] interval in
+            guard let self else { return }
+            self.preferences.pollingInterval = interval
+            if self.permissionGranted { self.scheduler.start(interval: interval) }
+            self.refresh()
+        }
+        actions.login = { [weak self] enabled in
+            guard let self else { return }
+            do {
+                try self.launchAgent.setLaunchAtLogin(enabled)
+                AppLog.write("Launch at login: \(enabled).")
+                self.refresh()
+            } catch { self.showError("Could not change Launch at Login", error: error) }
+        }
+        actions.preview = { [weak self] in
+            guard let self else { return }
+            self.reminder.preview()
+            self.refresh()
+        }
+        actions.accessibility = {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        actions.diagnostics = { [weak self] in
+            guard let self else { return }
+            do {
+                try FileManager.default.createDirectory(at: self.launchAgent.logsDirectory, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(self.launchAgent.logsDirectory)
+            } catch { self.showError("Could not open diagnostic logs", error: error) }
+        }
+        actions.screen = { [weak self] screen in
+            self?.preferences.reminderScreen = screen
+            self?.alertController.invalidatePlacement()
+            self?.refresh()
+        }
+        actions.fullScreen = { [weak self] enabled in
+            self?.preferences.showInFullScreen = enabled
+            self?.alertController.invalidatePlacement()
+            self?.refresh()
+        }
+        actions.quit = { NSApp.terminate(nil) }
+        statusBar = StatusBarController(actions: actions)
+        scheduler = MonitorScheduler(providers: preferences.isProviderEnabled(provider.id) ? [provider] : [])
         scheduler.onSnapshot = { [weak self] snapshot in
+            Task { @MainActor in self?.receive(snapshot) }
+        }
+        updatePermission(prompt: true)
+        refresh()
+        maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                if self?.lastSnapshot != snapshot {
-                    AppLog.write("U state: installed=\(snapshot.isInstalled), running=\(snapshot.isRunning), unread=\(snapshot.unreadState.hasUnread).")
-                    self?.lastSnapshot = snapshot
+                guard let self else { return }
+                self.updatePermission(prompt: false)
+                if self.reminder.expirePause() {
+                    self.persistPause()
+                    AppLog.write("Timed pause expired; checking existing unread activity.")
+                    if self.permissionGranted { self.scheduler.pollOnce() }
                 }
-                self?.statusBarController?.updateSnapshot(snapshot)
+                self.refresh()
             }
         }
-        scheduler.onUnreadTransition = { [weak self] transition in
-            Task { @MainActor in
-                guard self?.preferences?.alertsPaused == false else {
-                    self?.statusBarController?.setAlertActive(false)
-                    return
-                }
+    }
 
-                self?.statusBarController?.setAlertActive(true)
-                self?.alertController?.show(snapshot: transition.snapshot)
-            }
+    private func receive(_ snapshot: AppMonitorSnapshot) {
+        guard permissionGranted else { return }
+        if snapshot != lastLoggedSnapshot {
+            AppLog.write("U state: running=\(snapshot.isRunning), unread=\(snapshot.unreadState.hasUnread), issue=\(snapshot.monitoringIssue?.rawValue ?? "none").")
+            lastLoggedSnapshot = snapshot
         }
-        scheduler.onUnreadCleared = { [weak self] _ in
-            Task { @MainActor in
-                self?.alertController?.dismiss()
-                self?.statusBarController?.setAlertActive(false)
-            }
+        reminder.receive(snapshot)
+        refresh()
+    }
+
+    private func updatePermission(prompt: Bool) {
+        let trusted = SystemAccessibilityPermissionChecker().isTrusted(prompt: prompt)
+        guard trusted != permissionGranted else { return }
+        permissionGranted = trusted
+        if trusted {
+            AppLog.write("Accessibility permission granted; monitoring started.")
+            reminder.resumeAfterPermissionChange()
+            scheduler.start(interval: preferences.pollingInterval)
+        } else {
+            AppLog.write("Accessibility permission lost; monitoring stopped.")
+            scheduler.stop()
+            reminder.hide()
         }
+    }
 
-        self.provider = provider
-        self.preferences = preferences
-        self.alertController = alertController
-        self.statusBarController = statusBarController
-        self.scheduler = scheduler
+    private func pause(minutes: Double?) {
+        reminder.pause(minutes: minutes)
+        persistPause()
+        AppLog.write("Alerts paused: \(minutes.map { "\(Int($0)) minutes" } ?? "until resumed").")
+        refresh()
+    }
 
-        startSchedulerWhenAccessibilityIsTrusted(prompt: true)
-        schedulePermissionRecheck()
+    private func resume() {
+        reminder.resume()
+        persistPause()
+        AppLog.write("Alerts resumed; checking existing unread activity.")
+        if permissionGranted { scheduler.pollOnce() }
+        refresh()
+    }
+
+    private func persistPause() {
+        preferences.alertsPaused = reminder.isPaused
+        preferences.pauseUntil = reminder.pauseUntil
+    }
+
+    private func hideReminder() {
+        reminder.hide()
+        refresh()
+    }
+
+    private func openU() {
+        provider.openApp()
+        hideReminder()
+    }
+
+    private func refresh() {
+        statusBar.update(reminder: reminder, permissionRequired: !permissionGranted,
+                         pollingInterval: preferences.pollingInterval, launchAtLogin: launchAgent.launchAtLogin,
+                         screen: preferences.reminderScreen, showInFullScreen: preferences.showInFullScreen)
+        if reminder.isVisible, let snapshot = reminder.displaySnapshot {
+            alertController.show(snapshot: snapshot, detectedAt: reminder.detectedAt, isPreview: reminder.isPreview,
+                                 screenMode: preferences.reminderScreen, showInFullScreen: preferences.showInFullScreen)
+        } else { alertController.dismiss() }
+    }
+
+    private func showError(_ title: String, error: Error) {
+        AppLog.write("\(title): \(error.localizedDescription)")
+        Task { @MainActor in
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = error.localizedDescription
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        AppLog.write("BadgeBell exited normally; automatic restart is suppressed.")
-        permissionTimer?.invalidate()
+        maintenanceTimer?.invalidate()
         scheduler?.stop()
-    }
-
-    private func startSchedulerWhenAccessibilityIsTrusted(prompt: Bool) {
-        guard let scheduler, let preferences, let statusBarController else {
-            return
-        }
-
-        guard accessibilityPermissionChecker.isTrusted(prompt: prompt) else {
-            if permissionGranted { AppLog.write("Accessibility permission lost; monitoring stopped.") }
-            permissionGranted = false
-            scheduler.stop()
-            alertController?.dismiss()
-            statusBarController.setAccessibilityPermissionRequired()
-            schedulePermissionRecheck()
-            return
-        }
-
-        if !permissionGranted { AppLog.write("Accessibility permission granted; monitoring started.") }
-        permissionGranted = true
-        scheduler.start(interval: preferences.pollingInterval)
-    }
-
-    private func updatePollingInterval(_ interval: Double) {
-        preferences?.pollingInterval = interval
-        startSchedulerWhenAccessibilityIsTrusted(prompt: false)
-    }
-
-    private func updateAlertsPaused(_ alertsPaused: Bool) {
-        AppLog.write("Alerts paused: \(alertsPaused).")
-        preferences?.alertsPaused = alertsPaused
-        if alertsPaused {
-            alertController?.dismiss()
-            statusBarController?.setAlertActive(false)
-        }
-    }
-
-    private func schedulePermissionRecheck() {
-        guard permissionTimer == nil else {
-            return
-        }
-
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self,
-                      self.accessibilityPermissionChecker.isTrusted(prompt: false) != self.permissionGranted else { return }
-                self.startSchedulerWhenAccessibilityIsTrusted(prompt: false)
-            }
-        }
+        AppLog.write("BadgeBell exited normally; automatic restart is suppressed.")
     }
 }

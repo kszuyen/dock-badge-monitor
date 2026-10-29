@@ -19,6 +19,22 @@ final class PreferencesStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testPauseDeadlineAndDisplayPreferencesSurviveRestart() {
+        var store = PreferencesStore(defaults: defaults)
+        let deadline = Date(timeIntervalSince1970: 123456)
+        store.alertsPaused = true
+        store.pauseUntil = deadline
+        store.reminderScreen = "main"
+        store.showInFullScreen = false
+        let restored = PreferencesStore(defaults: defaults)
+        XCTAssertEqual(restored.pauseUntil, deadline)
+        XCTAssertTrue(restored.alertsPaused)
+        XCTAssertEqual(restored.reminderScreen, "main")
+        XCTAssertFalse(restored.showInFullScreen)
+        store.pauseUntil = nil
+        XCTAssertNil(store.pauseUntil)
+    }
+
     func testDefaults() {
         let store = PreferencesStore(defaults: defaults)
 

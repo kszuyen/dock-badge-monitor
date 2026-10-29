@@ -43,27 +43,37 @@ Development copies do not use the installed app's crash recovery.
 
 ## Usage
 
-After launch, BadgeBell appears in the menu bar as `Bell`.
-`Bell!` indicates an active unread reminder; `Bell?` indicates missing Accessibility permission.
-The menu reports whether U is running, has unread activity, or is being monitored with alerts paused.
+BadgeBell uses a fixed-width bell symbol in the macOS menu bar.
+A bell with a badge indicates unread activity, a crossed bell indicates paused reminders, and a warning triangle indicates missing permission or unavailable detection.
+Hover over the symbol for a status summary.
+Hiding a reminder does not clear the unread indicator.
+Only the Dock's actual unread state can clear it.
 
 Menu actions:
 
-- `Open U` opens CyberLink U.
-- `Dismiss Alert` hides the current reminder.
-- `Pause Alerts` stops floating reminders while BadgeBell keeps checking U.
-- `Resume Alerts` turns floating reminders back on.
-- `Check every 1s`, `Check every 2s`, `Check every 5s`, and `Check every 10s` set how often BadgeBell checks the Dock badge.
-- `Launch at Login` enables or disables startup at the next login.
-- `Open Accessibility Settings` opens the permission settings.
-- `Open Diagnostic Logs` opens the local log folder.
-- `Quit BadgeBell` exits successfully and stays closed until you open it again or log in with startup enabled.
+- `Open U` opens CyberLink U and hides the current reminder.
+- `Hide This Reminder` hides the card while keeping unread activity visible in the menu bar.
+- `Pause Alerts` offers 15 minutes, 30 minutes, 1 hour, or `Until I Resume`.
+- `Resume Alerts` immediately checks U and redisplays a reminder if unread activity remains.
+- `Preview Reminder` displays a clearly labeled sample without changing unread activity or pause settings.
+- `Check Interval` contains 1, 2, 5, and 10 second choices and displays the current interval on its parent item.
+- `Reminder Display` selects the screen with the pointer or the primary screen, and controls whether reminders appear over full-screen apps.
+- `Launch at Login` controls startup at the next login.
+- `Help & Diagnostics` contains permission settings, local logs, and version information.
+- `Quit BadgeBell` exits normally and stays closed until reopened or the next enabled login startup.
 
-When BadgeBell detects unread activity from U, it shows a persistent top-right reminder. The reminder does not include message contents.
+The reminder uses U's installed application icon and shows no message content.
+`Remind in 10 min` uses the same timed pause as the menu.
+Timed pauses persist across restarts and expire after system sleep; monitoring continues while reminders are paused.
+The reminder is a nonactivating panel, so appearing does not take keyboard focus from the current app.
+Repeated unread updates reuse the same card rather than stacking new windows.
+By default, a newly shown reminder uses the screen containing the pointer and remains visible over full-screen apps.
+An already visible card stays on its screen when the pointer moves.
 
-BadgeBell checks every 2 seconds by default. Faster checks react sooner but inspect Dock state more often.
-
-Quiet Mode is controlled by `Pause Alerts`. While paused, BadgeBell still updates the menu bar status, but it does not show the floating reminder.
+Failed Dock reads are shown as unavailable rather than as an empty inbox.
+If U's Dock item is unavailable, keep U visible in the Dock and check Accessibility permission.
+BadgeBell checks every 2 seconds by default and preserves your selected interval across updates.
+Menus apply coalesced updates after root and submenu tracking finishes to avoid layout churn.
 
 ## Permissions
 
@@ -173,3 +183,13 @@ After the local identity exists, `package-app.sh` uses `BadgeBell Local Code Sig
 ## License
 
 MIT. See `LICENSE`.
+
+## UI Verification
+
+Run `swift test` for reminder-state, pause persistence, native menu action, submenu tracking, and detector regressions.
+Render the actual SwiftUI reminder in both appearances without capturing the desktop:
+
+```sh
+swiftc Sources/BadgeBell/UI/FloatingAlertView.swift scripts/render-ui-preview.swift -o .build/render-ui-preview
+.build/render-ui-preview /path/to/preview-output
+```

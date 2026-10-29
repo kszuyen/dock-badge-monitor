@@ -4,125 +4,117 @@ import XCTest
 
 @MainActor
 final class StatusBarControllerTests: XCTestCase {
-    func testQuicklyReopenedMenuRemainsFrozenUntilItsOwnClose() async {
-        let controller = StatusBarController(openU: {}, dismissAlert: {}, quit: {})
-        let menu = NSMenu()
-        controller.menuWillOpen(menu)
-        controller.setAccessibilityPermissionRequired()
-        controller.menuDidClose(menu)
-        controller.menuWillOpen(menu)
-        let oldClose = expectation(description: "Old close callback executed")
-        DispatchQueue.main.async { oldClose.fulfill() }
-        await fulfillment(of: [oldClose], timeout: 2)
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
-        controller.menuDidClose(menu)
-        let newClose = expectation(description: "New close callback executed")
-        DispatchQueue.main.async { newClose.fulfill() }
-        await fulfillment(of: [newClose], timeout: 2)
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Accessibility permission needed")
-    }
-
-    func testPollingCannotRelayoutOpenMenuAndLatestStatusIsAppliedAfterClose() async {
-        let controller = StatusBarController(openU: {}, dismissAlert: {}, quit: {})
-        let menu = NSMenu()
-        controller.menuWillOpen(menu)
-        for index in 0..<300 {
-            controller.updateSnapshot(AppMonitorSnapshot(
-                providerID: "cyberlink-u", appName: "U", isInstalled: true,
-                isRunning: true, unreadState: index.isMultiple(of: 2) ? .none : .hasUnread(count: index)
-            ))
-            controller.setAlertActive(true)
-        }
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
-        controller.menuDidClose(menu)
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
-        let applied = expectation(description: "Menu event loop finished")
+    private func drainMenuCallbacks() async {
+        let applied = expectation(description: "Menu tracking callbacks finished")
         DispatchQueue.main.async { applied.fulfill() }
         await fulfillment(of: [applied], timeout: 2)
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Unread")
     }
 
-    func testPausedStatusStillReportsMissingPermission() {
-        let controller = StatusBarController(openU: {}, dismissAlert: {}, quit: {}, alertsPaused: true)
-        controller.updateSnapshot(AppMonitorSnapshot(
-            providerID: "cyberlink-u", appName: "U", isInstalled: true,
-            isRunning: true, unreadState: .none
-        ))
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Monitoring (alerts paused)")
-        controller.setAccessibilityPermissionRequired()
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Accessibility permission needed")
+    func testQuickReopenAndNestedMenusStayFrozenUntilAllMenusClose() async {
+        let controller = StatusBarController()
+        let submenu = NSMenu()
+        controller.menuWillOpen(controller.menu)
+        controller.update(reminder: ReminderState(), permissionRequired: true)
+        controller.menuWillOpen(submenu)
+        controller.menuDidClose(submenu)
+        await drainMenuCallbacks()
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
+        controller.menuDidClose(controller.menu)
+        controller.menuWillOpen(controller.menu)
+        await drainMenuCallbacks()
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
+        controller.menuDidClose(controller.menu)
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
+        await drainMenuCallbacks()
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Permission needed")
     }
 
-    func testShowsAccessibilityPermissionStatus() {
-        let controller = StatusBarController(openU: {}, dismissAlert: {}, quit: {})
-
-        controller.setAccessibilityPermissionRequired()
-
-        XCTAssertEqual(controller.statusTitleForTesting, "U: Accessibility permission needed")
+    func testRepeatedPollingDoesNotChangeOpenMenuOrStatusIcon() async {
+        let controller = StatusBarController()
+        var reminder = ReminderState()
+        controller.menuWillOpen(controller.menu)
+        for index in 1...300 {
+            reminder.receive(snapshot(.hasUnread(count: index)))
+            controller.update(reminder: reminder)
+        }
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Checking")
+        XCTAssertEqual(controller.symbolForTesting, "bell")
+        controller.menuDidClose(controller.menu)
+        await drainMenuCallbacks()
+        XCTAssertEqual(controller.statusTitleForTesting, "U · 300 unread")
+        XCTAssertEqual(controller.symbolForTesting, "bell.badge")
     }
 
-    func testShowsSelectedPollingInterval() {
-        let controller = StatusBarController(
-            openU: {},
-            dismissAlert: {},
-            quit: {},
-            pollingInterval: 2.0,
-            setPollingInterval: { _ in }
-        )
-
-        XCTAssertEqual(
-            controller.pollingIntervalStatesForTesting,
-            [
-                "Check every 1s": false,
-                "Check every 2s": true,
-                "Check every 5s": false,
-                "Check every 10s": false,
-            ]
-        )
+    func testPauseIsAnActionWithoutCheckmarkAndResumeHasNoSubmenu() {
+        let controller = StatusBarController()
+        XCTAssertNotNil(controller.pauseItemForTesting.submenu)
+        XCTAssertEqual(controller.pauseItemForTesting.state, .off)
+        var reminder = ReminderState()
+        reminder.pause(minutes: 30)
+        controller.update(reminder: reminder)
+        XCTAssertEqual(controller.pauseItemForTesting.title, "Resume Alerts")
+        XCTAssertNil(controller.pauseItemForTesting.submenu)
+        XCTAssertEqual(controller.pauseItemForTesting.state, .off)
+        XCTAssertTrue(controller.statusDetailForTesting.contains("30 min"))
+        XCTAssertEqual(controller.symbolForTesting, "bell.slash")
     }
 
-    func testSelectingPollingIntervalNotifiesConsumerAndUpdatesSelection() {
-        var selectedIntervals: [Double] = []
-        let controller = StatusBarController(
-            openU: {},
-            dismissAlert: {},
-            quit: {},
-            pollingInterval: 2.0,
-            setPollingInterval: { selectedIntervals.append($0) }
-        )
-
-        controller.selectPollingIntervalForTesting(5.0)
-
-        XCTAssertEqual(selectedIntervals, [5.0])
-        XCTAssertEqual(controller.pollingIntervalStatesForTesting["Check every 5s"], true)
-        XCTAssertEqual(controller.pollingIntervalStatesForTesting["Check every 2s"], false)
+    func testHideKeepsUnreadIconAndDisablesHideAction() {
+        let controller = StatusBarController()
+        var reminder = ReminderState()
+        reminder.receive(snapshot(.hasUnread(count: 2)))
+        reminder.hide()
+        controller.update(reminder: reminder)
+        XCTAssertEqual(controller.symbolForTesting, "bell.badge")
+        XCTAssertFalse(controller.hideItemForTesting.isEnabled)
+        XCTAssertEqual(controller.statusTitleForTesting, "U · 2 unread")
     }
 
-    func testShowsAlertsPausedState() {
-        let controller = StatusBarController(
-            openU: {},
-            dismissAlert: {},
-            quit: {},
-            alertsPaused: true,
-            setAlertsPaused: { _ in }
-        )
-
-        XCTAssertEqual(controller.alertsPausedTitleForTesting, "Resume Alerts")
+    func testNativeMenuDispatchesTimedPauseAndIntervalActions() throws {
+        var chosenPause: Double?
+        var chosenInterval: Double?
+        var actions = StatusBarController.Actions()
+        actions.pause = { chosenPause = $0 }
+        actions.interval = { chosenInterval = $0 }
+        let controller = StatusBarController(actions: actions)
+        let pause = try XCTUnwrap(controller.pauseItemForTesting.submenu)
+        pause.performActionForItem(at: 1)
+        XCTAssertEqual(chosenPause, 30)
+        let intervals = try XCTUnwrap(controller.intervalItemForTesting.submenu)
+        intervals.performActionForItem(at: 2)
+        XCTAssertEqual(chosenInterval, 5)
     }
 
-    func testTogglingAlertsPausedNotifiesConsumerAndUpdatesTitle() {
-        var selectedStates: [Bool] = []
-        let controller = StatusBarController(
-            openU: {},
-            dismissAlert: {},
-            quit: {},
-            alertsPaused: false,
-            setAlertsPaused: { selectedStates.append($0) }
-        )
+    func testIntervalsAreNestedAndOnlyCurrentIntervalIsChecked() {
+        let controller = StatusBarController()
+        controller.update(reminder: ReminderState(), pollingInterval: 5)
+        let parent = controller.intervalItemForTesting
+        XCTAssertEqual(parent.title, "Check Interval: 5s")
+        XCTAssertEqual(parent.submenu?.items.filter { $0.state == .on }.map(\.title), ["5 Seconds"])
+        XCTAssertFalse(controller.menu.items.contains { $0.title == "5 Seconds" })
+    }
 
-        controller.toggleAlertsPausedForTesting()
+    func testMissingPermissionHasPriorityOverPauseAndUnread() {
+        let controller = StatusBarController()
+        var reminder = ReminderState()
+        reminder.receive(snapshot(.hasUnread(count: 2)))
+        reminder.pause(minutes: nil)
+        controller.update(reminder: reminder, permissionRequired: true)
+        XCTAssertEqual(controller.symbolForTesting, "exclamationmark.triangle")
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Permission needed")
+    }
 
-        XCTAssertEqual(selectedStates, [true])
-        XCTAssertEqual(controller.alertsPausedTitleForTesting, "Resume Alerts")
+    func testDetectionFailureIsNotPresentedAsNoUnread() {
+        let controller = StatusBarController()
+        var reminder = ReminderState()
+        reminder.receive(snapshot(.none, issue: .dockUnavailable))
+        controller.update(reminder: reminder)
+        XCTAssertEqual(controller.statusTitleForTesting, "U: Detection unavailable")
+        XCTAssertEqual(controller.symbolForTesting, "exclamationmark.triangle")
+    }
+
+    private func snapshot(_ unread: UnreadState, issue: MonitoringIssue? = nil) -> AppMonitorSnapshot {
+        AppMonitorSnapshot(providerID: "u", appName: "U", isInstalled: true,
+                           isRunning: true, unreadState: unread, monitoringIssue: issue)
     }
 }

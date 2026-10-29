@@ -7,6 +7,9 @@ public struct PreferencesStore {
         static let pollingInterval = "preferences.pollingInterval"
         static let alertPosition = "preferences.alertPosition"
         static let launchAtLogin = "preferences.launchAtLogin"
+        static let pauseUntil = "preferences.pauseUntil"
+        static let reminderScreen = "preferences.reminderScreen"
+        static let showInFullScreen = "preferences.showInFullScreen"
         static let alertsPaused = "preferences.alertsPaused"
 
         static func providerEnabled(_ providerID: String) -> String {
@@ -69,6 +72,21 @@ public struct PreferencesStore {
         set {
             defaults.set(newValue, forKey: Keys.launchAtLogin)
         }
+    }
+
+    public var pauseUntil: Date? {
+        get { defaults.object(forKey: Keys.pauseUntil) as? Date }
+        set { defaults.set(newValue, forKey: Keys.pauseUntil) }
+    }
+
+    public var reminderScreen: String {
+        get { defaults.string(forKey: Keys.reminderScreen) ?? "active" }
+        set { defaults.set(newValue, forKey: Keys.reminderScreen) }
+    }
+
+    public var showInFullScreen: Bool {
+        get { defaults.object(forKey: Keys.showInFullScreen) == nil || defaults.bool(forKey: Keys.showInFullScreen) }
+        set { defaults.set(newValue, forKey: Keys.showInFullScreen) }
     }
 
     public var alertsPaused: Bool {

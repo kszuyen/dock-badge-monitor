@@ -4,6 +4,13 @@ import Foundation
 
 public protocol BadgeReading: Sendable {
     func unreadState(bundleIdentifier: String) -> UnreadState
+    func readStatus(bundleIdentifier: String) -> BadgeReadResult
+}
+
+public extension BadgeReading {
+    func readStatus(bundleIdentifier: String) -> BadgeReadResult {
+        BadgeReadResult(unreadState: unreadState(bundleIdentifier: bundleIdentifier))
+    }
 }
 
 public struct DockBadgeReader: BadgeReading {
@@ -19,14 +26,20 @@ public struct DockBadgeReader: BadgeReading {
     }
 
     public func unreadState(bundleIdentifier: String) -> UnreadState {
-        for snapshot in snapshotProvider.dockItemSnapshots() where snapshot.matches(
-            bundleIdentifier: bundleIdentifier,
-            targetAppName: targetAppName
-        ) {
-            return Self.parseStatusLabel(snapshot.combinedText)
-        }
+        readStatus(bundleIdentifier: bundleIdentifier).unreadState
+    }
 
-        return .none
+    public func readStatus(bundleIdentifier: String) -> BadgeReadResult {
+        let snapshots = snapshotProvider.dockItemSnapshots()
+        guard !snapshots.isEmpty else {
+            return BadgeReadResult(unreadState: .none, issue: .dockUnavailable)
+        }
+        for snapshot in snapshots where snapshot.matches(bundleIdentifier: bundleIdentifier, targetAppName: targetAppName) {
+            // Prefer the badge attribute; other labels may contain unrelated digits.
+            let label = snapshot.statusLabel.isEmpty ? snapshot.combinedText : snapshot.statusLabel
+            return BadgeReadResult(unreadState: Self.parseStatusLabel(label))
+        }
+        return BadgeReadResult(unreadState: .none, issue: .badgeUnavailable)
     }
 
     static func parseStatusLabel(_ statusLabel: String) -> UnreadState {

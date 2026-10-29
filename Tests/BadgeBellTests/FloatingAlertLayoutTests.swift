@@ -3,7 +3,7 @@ import XCTest
 
 final class FloatingAlertLayoutTests: XCTestCase {
     func testNativeGlassLayoutMetrics() {
-        XCTAssertEqual(FloatingAlertLayout.width, 340)
+        XCTAssertEqual(FloatingAlertLayout.width, 350)
         XCTAssertEqual(FloatingAlertLayout.cornerRadius, 16)
     }
 }

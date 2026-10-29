@@ -40,6 +40,7 @@ public final class MonitorScheduler: @unchecked Sendable {
         for provider in providers {
             let snapshot = provider.snapshot()
             onSnapshot?(snapshot)
+            guard snapshot.monitoringIssue == nil else { continue }
 
             let lastUnreadState = lastUnreadStateByProviderID[provider.id] ?? .none
             lastUnreadStateByProviderID[provider.id] = snapshot.unreadState

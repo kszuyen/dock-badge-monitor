@@ -2,6 +2,23 @@ import XCTest
 @testable import BadgeBell
 
 final class DockBadgeReaderTests: XCTestCase {
+    func testMissingDockIsReportedAsUnavailableInsteadOfHealthy() {
+        let reader = DockBadgeReader(targetAppName: "U", snapshotProvider: StubDockItemSnapshotProvider(snapshots: []))
+        XCTAssertEqual(reader.readStatus(bundleIdentifier: "com.cyberlink.u").issue, .dockUnavailable)
+    }
+
+    func testMissingTargetIsDistinctFromAnEmptyBadge() {
+        let reader = DockBadgeReader(targetAppName: "U", snapshotProvider: StubDockItemSnapshotProvider(snapshots: [
+            DockItemSnapshot(identifier: "finder", title: "Finder", description: "", statusLabel: "", accessibleDescription: "")
+        ]))
+        XCTAssertEqual(reader.readStatus(bundleIdentifier: "com.cyberlink.u").issue, .badgeUnavailable)
+        let emptyBadge = DockBadgeReader(targetAppName: "U", snapshotProvider: StubDockItemSnapshotProvider(snapshots: [
+            DockItemSnapshot(identifier: "com.cyberlink.u", title: "U", description: "", statusLabel: "", accessibleDescription: "")
+        ]))
+        XCTAssertNil(emptyBadge.readStatus(bundleIdentifier: "com.cyberlink.u").issue)
+        XCTAssertEqual(emptyBadge.unreadState(bundleIdentifier: "com.cyberlink.u"), .none)
+    }
+
     func testUnreadStateReadsMatchingSnapshotByBundleIdentifier() {
         let provider = StubDockItemSnapshotProvider(snapshots: [
             DockItemSnapshot(identifier: "com.apple.finder", title: "Finder", description: "", statusLabel: "", accessibleDescription: ""),

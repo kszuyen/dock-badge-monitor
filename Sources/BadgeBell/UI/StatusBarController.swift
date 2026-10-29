@@ -2,244 +2,228 @@ import AppKit
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
-    static let statusMenuItemTag = 1001
-    private static let pollingIntervals = [1.0, 2.0, 5.0, 10.0]
+    struct Actions {
+        var openU: () -> Void = {}
+        var hide: () -> Void = {}
+        var pause: (Double?) -> Void = { _ in }
+        var resume: () -> Void = {}
+        var interval: (Double) -> Void = { _ in }
+        var login: (Bool) -> Void = { _ in }
+        var preview: () -> Void = {}
+        var accessibility: () -> Void = {}
+        var diagnostics: () -> Void = {}
+        var screen: (String) -> Void = { _ in }
+        var fullScreen: (Bool) -> Void = { _ in }
+        var quit: () -> Void = {}
+    }
 
-    private let statusItem: NSStatusItem
-    private let statusMenuItem: NSMenuItem
-    private let openU: @MainActor () -> Void
-    private let dismissAlert: @MainActor () -> Void
-    private let quit: @MainActor () -> Void
-    private let setPollingInterval: @MainActor (Double) -> Void
-    private let setAlertsPaused: @MainActor (Bool) -> Void
-    private var pollingInterval: Double
-    private var alertsPaused: Bool
-    private var pollingIntervalMenuItems: [Double: NSMenuItem] = [:]
-    private var alertsPausedMenuItem: NSMenuItem?
-    private var launchAtLoginMenuItem: NSMenuItem?
-    private var launchAtLogin = false
-    private var setLaunchAtLogin: @MainActor (Bool) -> Bool = { _ in true }
-    private var openAccessibilitySettings: @MainActor () -> Void = {}
-    private var openDiagnostics: @MainActor () -> Void = {}
-    private var menuIsTracking = false
-    private var trackingGeneration = 0
-    private var pendingStatusTitle = "U: Checking"
-    private var alertActive = false
+    let menu = NSMenu()
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let heading = NSMenuItem(title: "U: Checking", action: nil, keyEquivalent: "")
+    private let detail = NSMenuItem(title: "Starting monitoring…", action: nil, keyEquivalent: "")
+    private let actions: Actions
+    private var hideItem: NSMenuItem!
+    private var openItem: NSMenuItem!
+    private var pauseItem: NSMenuItem!
+    private var intervalItem: NSMenuItem!
+    private var loginItem: NSMenuItem!
+    private var permissionItem: NSMenuItem!
+    private var fullScreenItem: NSMenuItem!
+    private let pauseMenu = NSMenu()
+    private var intervals: [Double: NSMenuItem] = [:]
+    private var screens: [String: NSMenuItem] = [:]
+    private var reminder = ReminderState()
     private var permissionRequired = false
-    private var latestSnapshot: AppMonitorSnapshot?
+    private var pollingInterval: Double = 2
+    private var login = false
+    private var selectedScreen = "active"
+    private var showInFullScreen = true
+    private var isUnwinding = false
+    private var openMenus = 0
+    private var trackingGeneration = 0
+    private var currentSymbol = ""
 
-    init(
-        openU: @escaping @MainActor () -> Void,
-        dismissAlert: @escaping @MainActor () -> Void,
-        quit: @escaping @MainActor () -> Void,
-        pollingInterval: Double = 2.0,
-        setPollingInterval: @escaping @MainActor (Double) -> Void = { _ in },
-        alertsPaused: Bool = false,
-        setAlertsPaused: @escaping @MainActor (Bool) -> Void = { _ in },
-        launchAtLogin: Bool = false,
-        setLaunchAtLogin: @escaping @MainActor (Bool) -> Bool = { _ in true },
-        openAccessibilitySettings: @escaping @MainActor () -> Void = {},
-        openDiagnostics: @escaping @MainActor () -> Void = {}
-    ) {
-        self.statusItem = NSStatusBar.system.statusItem(withLength: 48)
-        self.statusMenuItem = NSMenuItem(title: "U: Checking", action: nil, keyEquivalent: "")
-        self.openU = openU
-        self.dismissAlert = dismissAlert
-        self.quit = quit
-        self.pollingInterval = pollingInterval
-        self.setPollingInterval = setPollingInterval
-        self.alertsPaused = alertsPaused
-        self.setAlertsPaused = setAlertsPaused
-        self.launchAtLogin = launchAtLogin
-        self.setLaunchAtLogin = setLaunchAtLogin
-        self.openAccessibilitySettings = openAccessibilitySettings
-        self.openDiagnostics = openDiagnostics
-
+    init(actions: Actions = Actions()) {
+        self.actions = actions
         super.init()
-
-        configureStatusItem()
-    }
-
-    func setAlertActive(_ isActive: Bool) {
-        alertActive = isActive
+        configure()
+        statusItem.menu = menu
         applyPresentation()
     }
 
-    func updateSnapshot(_ snapshot: AppMonitorSnapshot) {
-        permissionRequired = false
-        latestSnapshot = snapshot
-        updateStatusTitle()
+    func update(reminder: ReminderState, permissionRequired: Bool = false,
+                pollingInterval: Double = 2, launchAtLogin: Bool = false,
+                screen: String = "active", showInFullScreen: Bool = true) {
+        self.reminder = reminder
+        self.permissionRequired = permissionRequired
+        self.pollingInterval = pollingInterval
+        login = launchAtLogin
+        selectedScreen = screen
+        self.showInFullScreen = showInFullScreen
+        applyPresentation()
     }
 
-    func setAccessibilityPermissionRequired() {
-        permissionRequired = true
-        updateStatusTitle()
-    }
-
-    private func updateStatusTitle() {
-        if permissionRequired {
-            pendingStatusTitle = "U: Accessibility permission needed"
-        } else if let snapshot = latestSnapshot {
-            if !snapshot.isInstalled { pendingStatusTitle = "U: Not installed" }
-            else if !snapshot.isRunning { pendingStatusTitle = "U: Not running" }
-            else if alertsPaused { pendingStatusTitle = "U: Monitoring (alerts paused)" }
-            else { pendingStatusTitle = snapshot.unreadState.hasUnread ? "U: Unread" : "U: Monitoring" }
+    private func configure() {
+        prepare(menu)
+        heading.isEnabled = false
+        heading.attributedTitle = NSAttributedString(string: heading.title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)])
+        detail.isEnabled = false
+        menu.addItem(heading)
+        menu.addItem(detail)
+        permissionItem = item("Open Accessibility Settings…", #selector(accessibilitySelected), symbol: "lock.open", in: menu)
+        menu.addItem(.separator())
+        openItem = item("Open U", #selector(openSelected), symbol: "arrow.up.right", in: menu)
+        hideItem = item("Hide This Reminder", #selector(hideSelected), symbol: "xmark", in: menu)
+        pauseItem = item("Pause Alerts", #selector(resumeSelected), symbol: "pause", in: menu)
+        prepare(pauseMenu)
+        for minutes in [15, 30, 60] {
+            let option = item(minutes == 60 ? "For 1 Hour" : "For \(minutes) Minutes", #selector(pauseSelected(_:)), in: pauseMenu)
+            option.representedObject = Double(minutes)
         }
-        applyPresentation()
+        pauseMenu.addItem(.separator())
+        item("Until I Resume", #selector(pauseSelected(_:)), in: pauseMenu)
+        item("Preview Reminder", #selector(previewSelected), symbol: "rectangle.on.rectangle", in: menu)
+        menu.addItem(.separator())
+        intervalItem = item("Check Interval: 2s", nil, in: menu)
+        let intervalMenu = NSMenu()
+        prepare(intervalMenu)
+        for seconds in [1.0, 2.0, 5.0, 10.0] {
+            let option = item("\(Int(seconds)) \(seconds == 1 ? "Second" : "Seconds")", #selector(intervalSelected(_:)), in: intervalMenu)
+            option.representedObject = seconds
+            intervals[seconds] = option
+        }
+        intervalItem.submenu = intervalMenu
+        let placement = item("Reminder Display", nil, in: menu)
+        let displayMenu = NSMenu()
+        prepare(displayMenu)
+        for (value, title) in [("active", "Screen with Pointer"), ("main", "Primary Screen")] {
+            let option = item(title, #selector(screenSelected(_:)), in: displayMenu)
+            option.representedObject = value
+            screens[value] = option
+        }
+        displayMenu.addItem(.separator())
+        fullScreenItem = item("Show over Full-Screen Apps", #selector(fullScreenSelected), in: displayMenu)
+        placement.submenu = displayMenu
+        loginItem = item("Launch at Login", #selector(loginSelected), in: menu)
+        menu.addItem(.separator())
+        let help = item("Help & Diagnostics", nil, in: menu)
+        let helpMenu = NSMenu()
+        prepare(helpMenu)
+        item("Accessibility Settings…", #selector(accessibilitySelected), in: helpMenu)
+        item("Diagnostic Logs…", #selector(diagnosticsSelected), in: helpMenu)
+        helpMenu.addItem(.separator())
+        item("About BadgeBell…", #selector(aboutSelected), in: helpMenu)
+        help.submenu = helpMenu
+        menu.addItem(.separator())
+        item("Quit BadgeBell", #selector(quitSelected), in: menu, key: "q")
     }
 
-    // AppKit can repeatedly invalidate menu row layout when titles change during tracking.
-    // Coalesce updates and apply only changed values after the tracking loop exits.
+    private func prepare(_ menu: NSMenu) {
+        menu.delegate = self
+        menu.autoenablesItems = false
+    }
+
+    @discardableResult
+    private func item(_ title: String, _ action: Selector?, symbol: String? = nil,
+                      in menu: NSMenu, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+        menu.addItem(item)
+        return item
+    }
+
+    // Never mutate any menu or status-button layout while a root or submenu is tracking.
     private func applyPresentation() {
-        guard !menuIsTracking else { return }
-        if statusMenuItem.title != pendingStatusTitle { statusMenuItem.title = pendingStatusTitle }
-        let title = permissionRequired ? "Bell?" : (alertActive && !alertsPaused ? "Bell!" : "Bell")
-        if statusItem.button?.title != title { statusItem.button?.title = title }
-        let pauseTitle = alertsPaused ? "Resume Alerts" : "Pause Alerts"
-        if alertsPausedMenuItem?.title != pauseTitle { alertsPausedMenuItem?.title = pauseTitle }
-        let pausedState: NSControl.StateValue = alertsPaused ? .on : .off
-        if alertsPausedMenuItem?.state != pausedState { alertsPausedMenuItem?.state = pausedState }
-        let loginState: NSControl.StateValue = launchAtLogin ? .on : .off
-        if launchAtLoginMenuItem?.state != loginState { launchAtLoginMenuItem?.state = loginState }
-        for (interval, item) in pollingIntervalMenuItems {
-            let state: NSControl.StateValue = interval == pollingInterval ? .on : .off
-            if item.state != state { item.state = state }
+        guard openMenus == 0, !isUnwinding else { return }
+        let snapshot = reminder.snapshot
+        let title: String
+        if permissionRequired { title = "U: Permission needed" }
+        else if snapshot?.monitoringIssue != nil { title = "U: Detection unavailable" }
+        else if snapshot?.isInstalled == false { title = "U: Not installed" }
+        else if snapshot?.isRunning == false { title = "U: Not running" }
+        else if case .hasUnread(let count?) = snapshot?.unreadState { title = "U · \(count) unread" }
+        else if reminder.hasUnread { title = "U: Unread" }
+        else { title = snapshot == nil ? "U: Checking" : "U: No unread messages" }
+        if heading.title != title {
+            heading.title = title
+            heading.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)])
         }
-        statusItem.button?.setAccessibilityLabel("BadgeBell. " + pendingStatusTitle)
+        let subtitle = permissionRequired ? "Enable Accessibility to monitor U" :
+            snapshot?.monitoringIssue?.description ?? reminder.pauseDescription() ?? "Monitoring · every \(Int(pollingInterval))s"
+        setTitle(subtitle, on: detail)
+        permissionItem.isHidden = !permissionRequired && snapshot?.monitoringIssue == nil
+        hideItem.isEnabled = reminder.isVisible
+        openItem.isEnabled = snapshot?.isInstalled != false
+        setTitle(reminder.isPaused ? "Resume Alerts" : "Pause Alerts", on: pauseItem)
+        pauseItem.submenu = reminder.isPaused ? nil : pauseMenu
+        pauseItem.image = NSImage(systemSymbolName: reminder.isPaused ? "play" : "pause", accessibilityDescription: nil)
+        pauseItem.state = .off
+        setTitle("Check Interval: \(Int(pollingInterval))s", on: intervalItem)
+        for (seconds, item) in intervals { item.state = seconds == pollingInterval ? .on : .off }
+        for (screen, item) in screens { item.state = screen == selectedScreen ? .on : .off }
+        loginItem.state = login ? .on : .off
+        fullScreenItem.state = showInFullScreen ? .on : .off
+        let symbol = permissionRequired || snapshot?.monitoringIssue != nil ? "exclamationmark.triangle" :
+            reminder.isPaused ? "bell.slash" : reminder.hasUnread ? "bell.badge" : "bell"
+        if currentSymbol != symbol {
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            image?.isTemplate = true
+            statusItem.button?.image = image
+            currentSymbol = symbol
+        }
+        let description = "BadgeBell. \(title). \(subtitle)"
+        if statusItem.button?.toolTip != description {
+            statusItem.button?.toolTip = description
+            statusItem.button?.setAccessibilityLabel(description)
+        }
+    }
+
+    private func setTitle(_ title: String, on item: NSMenuItem) {
+        if item.title != title { item.title = title }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         trackingGeneration &+= 1
-        menuIsTracking = true
+        openMenus += 1
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        // Keep updates frozen until AppKit has unwound the menu event loop.
+        isUnwinding = true
+        openMenus = max(0, openMenus - 1)
         let generation = trackingGeneration
         DispatchQueue.main.async { [weak self] in
             guard let self, self.trackingGeneration == generation else { return }
-            self.menuIsTracking = false
+            self.isUnwinding = false
             self.applyPresentation()
         }
     }
 
-    var statusTitleForTesting: String {
-        statusMenuItem.title
+    var statusTitleForTesting: String { heading.title }
+    var statusDetailForTesting: String { detail.title }
+    var symbolForTesting: String { currentSymbol }
+    var pauseItemForTesting: NSMenuItem { pauseItem }
+    var hideItemForTesting: NSMenuItem { hideItem }
+    var intervalItemForTesting: NSMenuItem { intervalItem }
+
+    @objc private func openSelected() { actions.openU() }
+    @objc private func hideSelected() { actions.hide() }
+    @objc private func pauseSelected(_ sender: NSMenuItem) { actions.pause(sender.representedObject as? Double) }
+    @objc private func resumeSelected() { actions.resume() }
+    @objc private func intervalSelected(_ sender: NSMenuItem) {
+        if let interval = sender.representedObject as? Double { actions.interval(interval) }
     }
-
-    var pollingIntervalStatesForTesting: [String: Bool] {
-        pollingIntervalMenuItems.reduce(into: [:]) { states, item in
-            states[item.value.title] = item.value.state == .on
-        }
+    @objc private func loginSelected() { actions.login(!login) }
+    @objc private func previewSelected() { actions.preview() }
+    @objc private func accessibilitySelected() { actions.accessibility() }
+    @objc private func diagnosticsSelected() { actions.diagnostics() }
+    @objc private func screenSelected(_ sender: NSMenuItem) {
+        if let screen = sender.representedObject as? String { actions.screen(screen) }
     }
-
-    var alertsPausedTitleForTesting: String? {
-        alertsPausedMenuItem?.title
+    @objc private func fullScreenSelected() { actions.fullScreen(!showInFullScreen) }
+    @objc private func aboutSelected() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "BadgeBell", .credits: NSAttributedString(string: "Persistent unread reminders for CyberLink U.")])
     }
-
-    func selectPollingIntervalForTesting(_ interval: Double) {
-        guard let item = pollingIntervalMenuItems[interval] else {
-            return
-        }
-
-        pollingIntervalSelected(item)
-    }
-
-    func toggleAlertsPausedForTesting() {
-        guard let alertsPausedMenuItem else {
-            return
-        }
-
-        alertsPausedSelected(alertsPausedMenuItem)
-    }
-
-    private func configureStatusItem() {
-        statusItem.button?.title = "Bell"
-
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.autoenablesItems = false
-
-        statusMenuItem.tag = Self.statusMenuItemTag
-        statusMenuItem.isEnabled = false
-        menu.addItem(statusMenuItem)
-        menu.addItem(.separator())
-        menu.addItem(menuItem(title: "Open U", action: #selector(openUSelected)))
-        menu.addItem(menuItem(title: "Dismiss Alert", action: #selector(dismissAlertSelected)))
-        let pauseItem = menuItem(title: "", action: #selector(alertsPausedSelected(_:)))
-        alertsPausedMenuItem = pauseItem
-        updateAlertsPausedSelection()
-        menu.addItem(pauseItem)
-        menu.addItem(.separator())
-        for interval in Self.pollingIntervals {
-            let item = menuItem(title: "Check every \(Int(interval))s", action: #selector(pollingIntervalSelected(_:)))
-            item.representedObject = interval
-            pollingIntervalMenuItems[interval] = item
-            menu.addItem(item)
-        }
-        updatePollingIntervalSelection()
-        menu.addItem(.separator())
-        let loginItem = menuItem(title: "Launch at Login", action: #selector(launchAtLoginSelected))
-        launchAtLoginMenuItem = loginItem
-        menu.addItem(loginItem)
-        menu.addItem(menuItem(title: "Open Accessibility Settings", action: #selector(accessibilitySettingsSelected)))
-        menu.addItem(menuItem(title: "Open Diagnostic Logs", action: #selector(diagnosticsSelected)))
-        menu.addItem(.separator())
-        menu.addItem(menuItem(title: "Quit BadgeBell", action: #selector(quitSelected)))
-        applyPresentation()
-
-        statusItem.menu = menu
-    }
-
-    private func menuItem(title: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        return item
-    }
-
-    @objc private func openUSelected() {
-        openU()
-    }
-
-    @objc private func dismissAlertSelected() {
-        dismissAlert()
-        setAlertActive(false)
-    }
-
-    @objc private func pollingIntervalSelected(_ sender: NSMenuItem) {
-        guard let interval = sender.representedObject as? Double else {
-            return
-        }
-
-        pollingInterval = interval
-        updatePollingIntervalSelection()
-        setPollingInterval(interval)
-    }
-
-    @objc private func alertsPausedSelected(_ sender: NSMenuItem) {
-        alertsPaused.toggle()
-        updateAlertsPausedSelection()
-        setAlertActive(false)
-        setAlertsPaused(alertsPaused)
-        updateStatusTitle()
-    }
-
-    private func updatePollingIntervalSelection() { applyPresentation() }
-
-    private func updateAlertsPausedSelection() { applyPresentation() }
-
-    @objc private func launchAtLoginSelected() {
-        let enabled = !launchAtLogin
-        if setLaunchAtLogin(enabled) {
-            launchAtLogin = enabled
-            applyPresentation()
-        }
-    }
-
-    @objc private func accessibilitySettingsSelected() { openAccessibilitySettings() }
-    @objc private func diagnosticsSelected() { openDiagnostics() }
-
-    @objc private func quitSelected() {
-        quit()
-    }
+    @objc private func quitSelected() { actions.quit() }
 }
