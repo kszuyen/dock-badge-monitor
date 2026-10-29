@@ -2,7 +2,8 @@
 
 BadgeBell is a tiny macOS menu bar app for apps that show unread Dock badges but do not reliably send macOS notifications.
 
-The first supported app is CyberLink U. When U has unread activity, BadgeBell keeps a reminder on screen until you dismiss it or open U.
+The first supported app is CyberLink U.
+When U has unread activity, BadgeBell keeps a reminder on screen until you dismiss it or open U.
 
 ## Why BadgeBell
 
@@ -17,7 +18,8 @@ BadgeBell is early software.
 - Supported app: CyberLink U (`com.cyberlink.u`)
 - Platform: macOS 13 or newer
 - Distribution: build from source for now
-- Installers and signed releases are not available yet
+- Local installation, login startup, and crash recovery are supported
+- Public notarized releases are not available yet
 
 ## Install
 
@@ -26,15 +28,24 @@ Clone the repository and package the app:
 ```sh
 git clone https://github.com/kszuyen/dock-badge-monitor.git
 cd dock-badge-monitor
-./scripts/package-app.sh
-open dist/BadgeBell.app
+./scripts/install-app.sh
 ```
 
-You can move `dist/BadgeBell.app` to `/Applications` if you want to keep it installed.
+The installer builds and signs BadgeBell, installs it at `/Applications/BadgeBell.app`, enables login startup on first install, and starts it.
+Updates preserve the existing login startup setting.
+Run the installer again to update; the previous installed app is backed up under `~/Library/Application Support/BadgeBell/Backups/`.
+Keep the installed path fixed so login startup and crash recovery can locate the app.
+The source checkout is only needed to develop or rebuild it.
+The installer stops the managed app during an update; quit any manually launched development copy first.
+
+For a development build without installation, use `./scripts/package-app.sh` followed by `open dist/BadgeBell.app`.
+Development copies do not use the installed app's crash recovery.
 
 ## Usage
 
 After launch, BadgeBell appears in the menu bar as `Bell`.
+`Bell!` indicates an active unread reminder; `Bell?` indicates missing Accessibility permission.
+The menu reports whether U is running, has unread activity, or is being monitored with alerts paused.
 
 Menu actions:
 
@@ -43,7 +54,10 @@ Menu actions:
 - `Pause Alerts` stops floating reminders while BadgeBell keeps checking U.
 - `Resume Alerts` turns floating reminders back on.
 - `Check every 1s`, `Check every 2s`, `Check every 5s`, and `Check every 10s` set how often BadgeBell checks the Dock badge.
-- `Quit BadgeBell` exits the app.
+- `Launch at Login` enables or disables startup at the next login.
+- `Open Accessibility Settings` opens the permission settings.
+- `Open Diagnostic Logs` opens the local log folder.
+- `Quit BadgeBell` exits successfully and stays closed until you open it again or log in with startup enabled.
 
 When BadgeBell detects unread activity from U, it shows a persistent top-right reminder. The reminder does not include message contents.
 
@@ -61,11 +75,37 @@ If unread detection does not work:
 2. Go to Privacy & Security.
 3. Open Accessibility.
 4. Enable BadgeBell.
-5. Quit and reopen BadgeBell.
+5. BadgeBell resumes monitoring within a few seconds after permission is granted.
 
-If BadgeBell is already enabled but still says permission is needed, remove BadgeBell from the Accessibility list, package the app again, reopen it, and add the rebuilt app bundle back to Accessibility.
+If BadgeBell is already enabled but still says permission is needed, remove the stale entry and add `/Applications/BadgeBell.app` to Accessibility again.
+Keep using the same local signing identity for updates.
 
 BadgeBell does not need Screen Recording for the current detector.
+
+## Startup and Recovery
+
+The installed app uses a per-user LaunchAgent named `io.github.kszuyen.badgebell.monitor`.
+Its persistent configuration lives at `~/Library/LaunchAgents/io.github.kszuyen.badgebell.monitor.plist` when login startup is enabled.
+An unsuccessful exit triggers automatic recovery, with a 30-second throttle between starts.
+A normal quit does not trigger recovery.
+Opening BadgeBell through Finder or Spotlight starts the managed job again and does not create another monitoring instance.
+
+Disabling `Launch at Login` removes the persistent configuration while the loaded job continues supervising the current session.
+A manual launch with login startup disabled registers a temporary job for the current session only.
+These settings do not require a system-wide daemon or administrator privileges.
+macOS can separately block background items; check System Settings > General > Login Items & Extensions if startup fails.
+
+Logs are stored at `~/Library/Logs/BadgeBell/monitor.log`.
+They contain lifecycle, permission, and unread-state changes without message contents.
+On manual startup, logs larger than 1 MiB rotate to `monitor.previous.log`.
+Accessibility permission is checked again while running; monitoring stops if permission is revoked and resumes when it returns.
+
+To remove the installed app, quit it, unload its job, remove its login configuration, then move `/Applications/BadgeBell.app` to Trash:
+
+```sh
+launchctl bootout "gui/$(id -u)/io.github.kszuyen.badgebell.monitor"
+rm -f "$HOME/Library/LaunchAgents/io.github.kszuyen.badgebell.monitor.plist"
+```
 
 ## Privacy
 
@@ -127,7 +167,6 @@ After the local identity exists, `package-app.sh` uses `BadgeBell Local Code Sig
 
 - Developer ID signed and notarized releases
 - DMG distribution
-- Launch at login
 - More app providers
 - Per-app reminder settings
 

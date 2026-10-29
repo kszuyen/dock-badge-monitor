@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class StatusBarController: NSObject {
+final class StatusBarController: NSObject, NSMenuDelegate {
     static let statusMenuItemTag = 1001
     private static let pollingIntervals = [1.0, 2.0, 5.0, 10.0]
 
@@ -16,6 +16,17 @@ final class StatusBarController: NSObject {
     private var alertsPaused: Bool
     private var pollingIntervalMenuItems: [Double: NSMenuItem] = [:]
     private var alertsPausedMenuItem: NSMenuItem?
+    private var launchAtLoginMenuItem: NSMenuItem?
+    private var launchAtLogin = false
+    private var setLaunchAtLogin: @MainActor (Bool) -> Bool = { _ in true }
+    private var openAccessibilitySettings: @MainActor () -> Void = {}
+    private var openDiagnostics: @MainActor () -> Void = {}
+    private var menuIsTracking = false
+    private var trackingGeneration = 0
+    private var pendingStatusTitle = "U: Checking"
+    private var alertActive = false
+    private var permissionRequired = false
+    private var latestSnapshot: AppMonitorSnapshot?
 
     init(
         openU: @escaping @MainActor () -> Void,
@@ -24,9 +35,13 @@ final class StatusBarController: NSObject {
         pollingInterval: Double = 2.0,
         setPollingInterval: @escaping @MainActor (Double) -> Void = { _ in },
         alertsPaused: Bool = false,
-        setAlertsPaused: @escaping @MainActor (Bool) -> Void = { _ in }
+        setAlertsPaused: @escaping @MainActor (Bool) -> Void = { _ in },
+        launchAtLogin: Bool = false,
+        setLaunchAtLogin: @escaping @MainActor (Bool) -> Bool = { _ in true },
+        openAccessibilitySettings: @escaping @MainActor () -> Void = {},
+        openDiagnostics: @escaping @MainActor () -> Void = {}
     ) {
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: 48)
         self.statusMenuItem = NSMenuItem(title: "U: Checking", action: nil, keyEquivalent: "")
         self.openU = openU
         self.dismissAlert = dismissAlert
@@ -35,6 +50,10 @@ final class StatusBarController: NSObject {
         self.setPollingInterval = setPollingInterval
         self.alertsPaused = alertsPaused
         self.setAlertsPaused = setAlertsPaused
+        self.launchAtLogin = launchAtLogin
+        self.setLaunchAtLogin = setLaunchAtLogin
+        self.openAccessibilitySettings = openAccessibilitySettings
+        self.openDiagnostics = openDiagnostics
 
         super.init()
 
@@ -42,15 +61,66 @@ final class StatusBarController: NSObject {
     }
 
     func setAlertActive(_ isActive: Bool) {
-        statusItem.button?.title = isActive && !alertsPaused ? "Bell!" : "Bell"
+        alertActive = isActive
+        applyPresentation()
     }
 
     func updateSnapshot(_ snapshot: AppMonitorSnapshot) {
-        statusMenuItem.title = snapshot.unreadState.hasUnread ? "U: Unread" : "U: Idle"
+        permissionRequired = false
+        latestSnapshot = snapshot
+        updateStatusTitle()
     }
 
     func setAccessibilityPermissionRequired() {
-        statusMenuItem.title = "U: Accessibility permission needed"
+        permissionRequired = true
+        updateStatusTitle()
+    }
+
+    private func updateStatusTitle() {
+        if permissionRequired {
+            pendingStatusTitle = "U: Accessibility permission needed"
+        } else if let snapshot = latestSnapshot {
+            if !snapshot.isInstalled { pendingStatusTitle = "U: Not installed" }
+            else if !snapshot.isRunning { pendingStatusTitle = "U: Not running" }
+            else if alertsPaused { pendingStatusTitle = "U: Monitoring (alerts paused)" }
+            else { pendingStatusTitle = snapshot.unreadState.hasUnread ? "U: Unread" : "U: Monitoring" }
+        }
+        applyPresentation()
+    }
+
+    // AppKit can repeatedly invalidate menu row layout when titles change during tracking.
+    // Coalesce updates and apply only changed values after the tracking loop exits.
+    private func applyPresentation() {
+        guard !menuIsTracking else { return }
+        if statusMenuItem.title != pendingStatusTitle { statusMenuItem.title = pendingStatusTitle }
+        let title = permissionRequired ? "Bell?" : (alertActive && !alertsPaused ? "Bell!" : "Bell")
+        if statusItem.button?.title != title { statusItem.button?.title = title }
+        let pauseTitle = alertsPaused ? "Resume Alerts" : "Pause Alerts"
+        if alertsPausedMenuItem?.title != pauseTitle { alertsPausedMenuItem?.title = pauseTitle }
+        let pausedState: NSControl.StateValue = alertsPaused ? .on : .off
+        if alertsPausedMenuItem?.state != pausedState { alertsPausedMenuItem?.state = pausedState }
+        let loginState: NSControl.StateValue = launchAtLogin ? .on : .off
+        if launchAtLoginMenuItem?.state != loginState { launchAtLoginMenuItem?.state = loginState }
+        for (interval, item) in pollingIntervalMenuItems {
+            let state: NSControl.StateValue = interval == pollingInterval ? .on : .off
+            if item.state != state { item.state = state }
+        }
+        statusItem.button?.setAccessibilityLabel("BadgeBell. " + pendingStatusTitle)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        trackingGeneration &+= 1
+        menuIsTracking = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Keep updates frozen until AppKit has unwound the menu event loop.
+        let generation = trackingGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.trackingGeneration == generation else { return }
+            self.menuIsTracking = false
+            self.applyPresentation()
+        }
     }
 
     var statusTitleForTesting: String {
@@ -87,6 +157,8 @@ final class StatusBarController: NSObject {
         statusItem.button?.title = "Bell"
 
         let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
 
         statusMenuItem.tag = Self.statusMenuItemTag
         statusMenuItem.isEnabled = false
@@ -107,7 +179,14 @@ final class StatusBarController: NSObject {
         }
         updatePollingIntervalSelection()
         menu.addItem(.separator())
+        let loginItem = menuItem(title: "Launch at Login", action: #selector(launchAtLoginSelected))
+        launchAtLoginMenuItem = loginItem
+        menu.addItem(loginItem)
+        menu.addItem(menuItem(title: "Open Accessibility Settings", action: #selector(accessibilitySettingsSelected)))
+        menu.addItem(menuItem(title: "Open Diagnostic Logs", action: #selector(diagnosticsSelected)))
+        menu.addItem(.separator())
         menu.addItem(menuItem(title: "Quit BadgeBell", action: #selector(quitSelected)))
+        applyPresentation()
 
         statusItem.menu = menu
     }
@@ -142,18 +221,23 @@ final class StatusBarController: NSObject {
         updateAlertsPausedSelection()
         setAlertActive(false)
         setAlertsPaused(alertsPaused)
+        updateStatusTitle()
     }
 
-    private func updatePollingIntervalSelection() {
-        for (interval, item) in pollingIntervalMenuItems {
-            item.state = interval == pollingInterval ? .on : .off
+    private func updatePollingIntervalSelection() { applyPresentation() }
+
+    private func updateAlertsPausedSelection() { applyPresentation() }
+
+    @objc private func launchAtLoginSelected() {
+        let enabled = !launchAtLogin
+        if setLaunchAtLogin(enabled) {
+            launchAtLogin = enabled
+            applyPresentation()
         }
     }
 
-    private func updateAlertsPausedSelection() {
-        alertsPausedMenuItem?.title = alertsPaused ? "Resume Alerts" : "Pause Alerts"
-        alertsPausedMenuItem?.state = alertsPaused ? .on : .off
-    }
+    @objc private func accessibilitySettingsSelected() { openAccessibilitySettings() }
+    @objc private func diagnosticsSelected() { openDiagnostics() }
 
     @objc private func quitSelected() {
         quit()
