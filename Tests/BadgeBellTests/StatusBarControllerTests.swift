@@ -85,6 +85,20 @@ final class StatusBarControllerTests: XCTestCase {
         XCTAssertEqual(chosenInterval, 5)
     }
 
+    func testStatusSummaryKeepsItsFixedSizeForErrorsAndPreviewStaysInHelp() throws {
+        let controller = StatusBarController()
+        let header = try XCTUnwrap(controller.menu.items.first?.view as? MenuStatusHeaderView)
+        let originalSize = header.frame.size
+        var reminder = ReminderState()
+        reminder.receive(snapshot(.none, issue: .dockUnavailable))
+        controller.update(reminder: reminder)
+        header.layoutSubtreeIfNeeded()
+        XCTAssertEqual(header.frame.size, originalSize)
+        XCTAssertFalse(controller.menu.items.contains { $0.title == "Preview Reminder" })
+        let help = try XCTUnwrap(controller.menu.items.first { $0.title == "Help & Diagnostics" }?.submenu)
+        XCTAssertTrue(help.items.contains { $0.title == "Preview Reminder" })
+    }
+
     func testIntervalsAreNestedAndOnlyCurrentIntervalIsChecked() {
         let controller = StatusBarController()
         controller.update(reminder: ReminderState(), pollingInterval: 5)

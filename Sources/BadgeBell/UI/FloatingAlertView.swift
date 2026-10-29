@@ -2,8 +2,14 @@ import AppKit
 import SwiftUI
 
 enum FloatingAlertLayout {
-    static let width: CGFloat = 350
-    static let cornerRadius: CGFloat = 16
+    static let width: CGFloat = 360
+    static let cornerRadius: CGFloat = 18
+    static let inset: CGFloat = 18
+
+    static func headline(unreadCount: Int?) -> String {
+        guard let unreadCount, unreadCount > 0 else { return "Unread messages" }
+        return unreadCount == 1 ? "1 unread message" : "\(unreadCount.formatted()) unread messages"
+    }
 }
 
 struct FloatingAlertView: View {
@@ -16,53 +22,74 @@ struct FloatingAlertView: View {
     let dismissAction: () -> Void
     let snoozeAction: () -> Void
 
+    private let surface = Color(nsColor: .controlBackgroundColor)
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Group {
-                    if let icon { Image(nsImage: icon).resizable().interpolation(.high) }
-                    else { Image(systemName: "app.fill").resizable().foregroundStyle(.secondary) }
-                }
-                .frame(width: 38, height: 38)
-                .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(isPreview ? "BadgeBell · Preview" : "BadgeBell · \(appName)")
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 10) {
+                    Group {
+                        if let icon { Image(nsImage: icon).resizable().interpolation(.high) }
+                        else { Image(systemName: "app.fill").resizable().foregroundStyle(.secondary) }
+                    }
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(appName).font(.system(size: 13, weight: .semibold))
+                        Text(isPreview ? "BadgeBell preview" : "BadgeBell")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text(detectedAt, format: .dateTime.hour().minute())
                         .font(.system(size: 11)).foregroundStyle(.secondary)
-                    Text("You have unread messages")
-                        .font(.system(size: 14, weight: .semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(unreadCount.map { "\($0) unread · Detected at \(detectedAt.formatted(date: .omitted, time: .shortened))" }
-                         ?? "Unread activity detected")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Detected at \(detectedAt.formatted(date: .omitted, time: .shortened))")
+                    Button(action: dismissAction) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide this reminder; unread activity remains in the menu bar")
+                    .accessibilityLabel("Hide this reminder")
+                    .keyboardShortcut(.cancelAction)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Button(action: dismissAction) {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary).frame(width: 24, height: 24).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Hide this reminder; unread activity remains in the menu bar")
-                .accessibilityLabel("Hide this reminder")
-                .keyboardShortcut(.cancelAction)
+
+                Text(FloatingAlertLayout.headline(unreadCount: unreadCount))
+                    .font(.system(size: 21, weight: .semibold))
+                    .tracking(-0.4)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                Button("Remind in 10 min", action: snoozeAction)
-                    .buttonStyle(.bordered)
-                    .help("Pause reminders for 10 minutes, then check U again")
+            .padding(FloatingAlertLayout.inset)
+
+            HStack(spacing: 12) {
+                Button(action: snoozeAction) {
+                    Label("Snooze 10 min", systemImage: "clock")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.primary)
+                .help("Pause reminders for 10 minutes, then check U again")
+
+                Spacer(minLength: 8)
                 Button("Open \(appName)", action: openAction)
+                    .font(.system(size: 12, weight: .semibold))
                     .buttonStyle(.borderedProminent)
+                    .tint(Color(nsColor: .systemBlue))
+                    .controlSize(.large)
             }
-            .controlSize(.regular)
+            .padding(.horizontal, FloatingAlertLayout.inset)
+            .padding(.vertical, 12)
+            .background(Color.primary.opacity(0.035))
         }
         .environment(\.controlActiveState, .active)
-        .padding(16)
         .frame(width: FloatingAlertLayout.width, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: FloatingAlertLayout.cornerRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: FloatingAlertLayout.cornerRadius)
-                .strokeBorder(.primary.opacity(0.09), lineWidth: 0.5)
-        }
+        .background(surface)
+        .clipShape(RoundedRectangle(cornerRadius: FloatingAlertLayout.cornerRadius, style: .continuous))
     }
 }

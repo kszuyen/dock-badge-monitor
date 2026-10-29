@@ -55,15 +55,18 @@ Menu actions:
 - `Hide This Reminder` hides the card while keeping unread activity visible in the menu bar.
 - `Pause Alerts` offers 15 minutes, 30 minutes, 1 hour, or `Until I Resume`.
 - `Resume Alerts` immediately checks U and redisplays a reminder if unread activity remains.
-- `Preview Reminder` displays a clearly labeled sample without changing unread activity or pause settings.
+- `Help & Diagnostics > Preview Reminder` displays a clearly labeled sample without changing unread activity or pause settings.
 - `Check Interval` contains 1, 2, 5, and 10 second choices and displays the current interval on its parent item.
 - `Reminder Display` selects the screen with the pointer or the primary screen, and controls whether reminders appear over full-screen apps.
 - `Launch at Login` controls startup at the next login.
 - `Help & Diagnostics` contains permission settings, local logs, and version information.
 - `Quit BadgeBell` exits normally and stays closed until reopened or the next enabled login startup.
 
+The menu opens with a fixed-size summary containing the BadgeBell name, U's icon, current unread state, and monitoring or pause status.
 The reminder uses U's installed application icon and shows no message content.
-`Remind in 10 min` uses the same timed pause as the menu.
+Unread counts lead the card, with detection time in the header and snooze and open actions in a separate footer.
+The card uses flat system surfaces and an adaptive high-contrast primary action in light and dark appearances.
+`Snooze 10 min` uses the same timed pause as the menu.
 Timed pauses persist across restarts and expire after system sleep; monitoring continues while reminders are paused.
 The reminder is a nonactivating panel, so appearing does not take keyboard focus from the current app.
 Repeated unread updates reuse the same card rather than stacking new windows.
@@ -190,6 +193,6 @@ Run `swift test` for reminder-state, pause persistence, native menu action, subm
 Render the actual SwiftUI reminder in both appearances without capturing the desktop:
 
 ```sh
-swiftc Sources/BadgeBell/UI/FloatingAlertView.swift scripts/render-ui-preview.swift -o .build/render-ui-preview
+swiftc Sources/BadgeBell/UI/FloatingAlertView.swift Sources/BadgeBell/UI/MenuStatusHeaderView.swift scripts/render-ui-preview.swift -o .build/render-ui-preview
 .build/render-ui-preview /path/to/preview-output
 ```
