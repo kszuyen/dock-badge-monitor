@@ -99,6 +99,13 @@ final class StatusBarControllerTests: XCTestCase {
         XCTAssertTrue(help.items.contains { $0.title == "Preview Reminder" })
     }
 
+    func testFastCadenceDoesNotOverwriteSelectedIdleInterval() {
+        let controller = StatusBarController()
+        controller.update(reminder: ReminderState(), pollingInterval: 10, effectiveInterval: 1)
+        XCTAssertEqual(controller.intervalItemForTesting.title, "Idle Check Interval: 10s")
+        XCTAssertEqual(controller.statusDetailForTesting, "Monitoring · every 1s")
+    }
+
     func testIntervalsAreNestedAndOnlyCurrentIntervalIsChecked() {
         let controller = StatusBarController()
         controller.update(reminder: ReminderState(), pollingInterval: 5)

@@ -2,6 +2,12 @@ import XCTest
 @testable import BadgeBell
 
 final class MonitorSchedulerTests: XCTestCase {
+    func testActiveReadingAndVisibleReminderUseOneSecondWithoutChangingIdlePreference() {
+        XCTAssertEqual(MonitoringCadence.interval(preferred: 10, reminderVisible: true, appIsActive: false), 1)
+        XCTAssertEqual(MonitoringCadence.interval(preferred: 10, reminderVisible: false, appIsActive: true), 1)
+        XCTAssertEqual(MonitoringCadence.interval(preferred: 10, reminderVisible: false, appIsActive: false), 10)
+    }
+
     func testEmitsWhenUnreadCountIncreases() {
         let provider = StubProvider(
             snapshots: [

@@ -20,6 +20,27 @@ final class ReminderStateTests: XCTestCase {
         XCTAssertTrue(state.isVisible)
     }
 
+    func testReadingMessagesUpdatesVisibleCountAndClosesWhenAllAreRead() {
+        var state = ReminderState()
+        state.receive(snapshot(5), now: now)
+        state.receive(snapshot(2), now: now.addingTimeInterval(1))
+        XCTAssertTrue(state.isVisible)
+        XCTAssertEqual(state.displaySnapshot?.unreadState, .hasUnread(count: 2))
+        XCTAssertEqual(state.detectedAt, now)
+        state.receive(snapshot(nil), now: now.addingTimeInterval(2))
+        XCTAssertFalse(state.isVisible)
+        XCTAssertFalse(state.hasUnread)
+    }
+
+    func testReadingSomeMessagesDoesNotReopenDismissedReminder() {
+        var state = ReminderState()
+        state.receive(snapshot(5))
+        state.hide()
+        state.receive(snapshot(2))
+        XCTAssertFalse(state.isVisible)
+        XCTAssertEqual(state.snapshot?.unreadState, .hasUnread(count: 2))
+    }
+
     func testResumeRedisplaysExistingUnreadWithoutCountChange() {
         var state = ReminderState()
         state.receive(snapshot(3))

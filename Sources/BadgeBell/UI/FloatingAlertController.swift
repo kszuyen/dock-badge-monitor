@@ -75,10 +75,20 @@ final class FloatingAlertController {
         let frame = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero
         let width = min(FloatingAlertLayout.width, frame.width - 40)
         let rect = NSRect(x: frame.maxX - width - 20, y: frame.maxY - size.height - 20,
-                          width: width, height: max(100, size.height))
+                          width: width, height: max(1, size.height))
         if window.frame != rect { window.setFrame(rect, display: true) }
         // A nonactivating panel keeps keyboard focus in the user's current application.
-        window.orderFrontRegardless()
+        if !wasVisible {
+            let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            window.alphaValue = animate ? 0 : 1
+            window.orderFrontRegardless()
+            if animate {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.14
+                    window.animator().alphaValue = 1
+                }
+            }
+        }
         window.invalidateShadow()
     }
 

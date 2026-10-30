@@ -35,6 +35,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var screens: [String: NSMenuItem] = [:]
     private var reminder = ReminderState()
     private var permissionRequired = false
+    private var effectiveInterval: Double?
     private var pollingInterval: Double = 2
     private var login = false
     private var selectedScreen = "active"
@@ -54,10 +55,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func update(reminder: ReminderState, permissionRequired: Bool = false,
                 pollingInterval: Double = 2, launchAtLogin: Bool = false,
-                screen: String = "active", showInFullScreen: Bool = true) {
+                screen: String = "active", showInFullScreen: Bool = true, effectiveInterval: Double? = nil) {
         self.reminder = reminder
         self.permissionRequired = permissionRequired
         self.pollingInterval = pollingInterval
+        self.effectiveInterval = effectiveInterval
         login = launchAtLogin
         selectedScreen = screen
         self.showInFullScreen = showInFullScreen
@@ -151,7 +153,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             heading.title = title
         }
         let subtitle = permissionRequired ? "Enable Accessibility to monitor U" :
-            snapshot?.monitoringIssue?.description ?? reminder.pauseDescription() ?? "Monitoring · every \(Int(pollingInterval))s"
+            snapshot?.monitoringIssue?.description ?? reminder.pauseDescription() ?? "Monitoring · every \(Int(effectiveInterval ?? pollingInterval))s"
         setTitle(subtitle, on: detail)
         statusHeader.update(title: title, detail: subtitle)
         permissionItem.isHidden = !permissionRequired && snapshot?.monitoringIssue == nil
@@ -160,7 +162,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         setTitle(reminder.isPaused ? "Resume Alerts" : "Pause Alerts", on: pauseItem)
         pauseItem.submenu = reminder.isPaused ? nil : pauseMenu
         pauseItem.state = .off
-        setTitle("Check Interval: \(Int(pollingInterval))s", on: intervalItem)
+        let intervalLabel = effectiveInterval != nil && effectiveInterval != pollingInterval ? "Idle Check Interval" : "Check Interval"
+        setTitle("\(intervalLabel): \(Int(pollingInterval))s", on: intervalItem)
+        intervalItem.toolTip = "Uses one-second checks while a reminder is visible or U is active; this setting controls idle checks."
         for (seconds, item) in intervals { item.state = seconds == pollingInterval ? .on : .off }
         for (screen, item) in screens { item.state = screen == selectedScreen ? .on : .off }
         loginItem.state = login ? .on : .off

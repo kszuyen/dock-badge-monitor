@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scheduler: MonitorScheduler!
     private var maintenanceTimer: Timer?
     private var permissionGranted = false
+    private var effectiveInterval: Double?
+    private var activationObserver: NSObjectProtocol?
     private var lastLoggedSnapshot: AppMonitorSnapshot?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -31,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.interval = { [weak self] interval in
             guard let self else { return }
             self.preferences.pollingInterval = interval
-            if self.permissionGranted { self.scheduler.start(interval: interval) }
+            self.updateCadence()
             self.refresh()
         }
         actions.login = { [weak self] enabled in
@@ -75,6 +77,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduler.onSnapshot = { [weak self] snapshot in
             Task { @MainActor in self?.receive(snapshot) }
         }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.permissionGranted else { return }
+                if !self.updateCadence() { self.scheduler.pollOnce() }
+            }
+        }
         updatePermission(prompt: true)
         refresh()
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -108,10 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if trusted {
             AppLog.write("Accessibility permission granted; monitoring started.")
             reminder.resumeAfterPermissionChange()
-            scheduler.start(interval: preferences.pollingInterval)
+            updateCadence()
         } else {
             AppLog.write("Accessibility permission lost; monitoring stopped.")
             scheduler.stop()
+            effectiveInterval = nil
             reminder.hide()
         }
     }
@@ -146,10 +157,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hideReminder()
     }
 
+    @discardableResult
+    private func updateCadence() -> Bool {
+        guard permissionGranted else { return false }
+        let interval = MonitoringCadence.interval(
+            preferred: preferences.pollingInterval,
+            reminderVisible: reminder.isVisible && !reminder.isPreview,
+            appIsActive: NSWorkspace.shared.frontmostApplication?.bundleIdentifier == provider.bundleIdentifier)
+        guard interval != effectiveInterval else { return false }
+        effectiveInterval = interval
+        scheduler.start(interval: interval)
+        return true
+    }
+
     private func refresh() {
+        updateCadence()
         statusBar.update(reminder: reminder, permissionRequired: !permissionGranted,
                          pollingInterval: preferences.pollingInterval, launchAtLogin: launchAgent.launchAtLogin,
-                         screen: preferences.reminderScreen, showInFullScreen: preferences.showInFullScreen)
+                         screen: preferences.reminderScreen, showInFullScreen: preferences.showInFullScreen,
+                         effectiveInterval: effectiveInterval)
         if reminder.isVisible, let snapshot = reminder.displaySnapshot {
             alertController.show(snapshot: snapshot, detectedAt: reminder.detectedAt, isPreview: reminder.isPreview,
                                  screenMode: preferences.reminderScreen, showInFullScreen: preferences.showInFullScreen)
@@ -168,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
         maintenanceTimer?.invalidate()
         scheduler?.stop()
         AppLog.write("BadgeBell exited normally; automatic restart is suppressed.")

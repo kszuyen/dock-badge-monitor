@@ -26,9 +26,10 @@ public final class MonitorScheduler: @unchecked Sendable {
         stop()
         pollOnce()
 
-        timer = Timer.scheduledTimer(withTimeInterval: max(interval, 1.0), repeats: true) { [weak self] _ in
+        timer = Timer(timeInterval: max(interval, 1.0), repeats: true) { [weak self] _ in
             self?.pollOnce()
         }
+        if let timer { RunLoop.main.add(timer, forMode: .common) }
     }
 
     public func stop() {
@@ -73,5 +74,12 @@ public final class MonitorScheduler: @unchecked Sendable {
         default:
             false
         }
+    }
+}
+
+/// Active reading and visible reminders use a short latency without changing the idle preference.
+enum MonitoringCadence {
+    static func interval(preferred: Double, reminderVisible: Bool, appIsActive: Bool) -> Double {
+        reminderVisible || appIsActive ? 1 : max(1, preferred)
     }
 }

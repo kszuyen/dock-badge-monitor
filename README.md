@@ -64,8 +64,10 @@ Menu actions:
 
 The menu opens with a fixed-size summary containing the BadgeBell name, U's icon, current unread state, and monitoring or pause status.
 The reminder uses U's installed application icon and shows no message content.
-Unread counts lead the card, with detection time in the header and snooze and open actions in a separate footer.
-The card uses flat system surfaces and an adaptive high-contrast primary action in light and dark appearances.
+Unread counts appear beside U's icon, with snooze and open actions underneath.
+Detection time is available in the headline tooltip.
+The compact card uses a native behind-window translucent material, with an opaque fallback when Reduce Transparency is enabled.
+Buttons provide hover and press feedback; Reduce Motion removes animated transitions.
 `Snooze 10 min` uses the same timed pause as the menu.
 Timed pauses persist across restarts and expire after system sleep; monitoring continues while reminders are paused.
 The reminder is a nonactivating panel, so appearing does not take keyboard focus from the current app.
@@ -75,7 +77,12 @@ An already visible card stays on its screen when the pointer moves.
 
 Failed Dock reads are shown as unavailable rather than as an empty inbox.
 If U's Dock item is unavailable, keep U visible in the Dock and check Accessibility permission.
-BadgeBell checks every 2 seconds by default and preserves your selected interval across updates.
+BadgeBell checks every 2 seconds by default and preserves your selected idle interval across updates.
+While a real reminder is visible or U is the foreground app, BadgeBell checks every second.
+Switching applications also triggers an immediate check.
+Decreasing unread counts update the existing card; clearing the Dock badge closes it.
+Detection latency still depends on when U updates the Dock badge.
+The timer continues in common run-loop modes so tracking a menu does not suspend monitoring.
 Menus apply coalesced updates after root and submenu tracking finishes to avoid layout churn.
 
 ## Permissions
